@@ -35,3 +35,35 @@ Available cameras
     Modes: 'SRGGB10_CSI2P' : 1536x864 [120.13 fps - (768, 432)/3072x1728 crop]
                              2304x1296 [56.03 fps - (0, 0)/4608x2592 crop]
                              4608x2592 [14.35 fps - (0, 0)/4608x2592 crop]
+
+pi@ksk94-lz674:~/gateway/Video-Gateway/data $ v4l2-ctl --list-devices
+bcm2835-codec-decode (platform:bcm2835-codec):
+        /dev/video10
+        /dev/video11
+        /dev/video12
+        /dev/video18
+        /dev/video31
+
+bcm2835-isp (platform:bcm2835-isp):
+        /dev/video13
+        /dev/video14
+        /dev/video15
+        /dev/video16
+        /dev/video20
+        /dev/video21
+        /dev/video22
+        /dev/video23
+        /dev/media2
+        /dev/media3
+
+unicam (platform:fe801000.csi):
+        /dev/video0
+        /dev/video1
+        /dev/media0
+
+rpi-hevc-dec (platform:rpi-hevc-dec):
+        /dev/video19
+        /dev/media1
+
+bcm2835-codec (vchiq:bcm2835-codec):
+        /dev/media4
