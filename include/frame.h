@@ -12,9 +12,14 @@ typedef atomic_int frame_refcnt_t;
 #endif
 
 /* Clock for TS_INGEST / TS_ENCODED / TS_SENT. Must match the clock that
- * libcamera uses for SensorTimestamp. TODO(A6): confirm and cite the source;
- * CLOCK_BOOTTIME is a placeholder until then. */
-#define FRAME_CLOCK_ID CLOCK_BOOTTIME
+ * libcamera uses for SensorTimestamp (TS_SENSOR).
+ *
+ * The libcamera docs say CLOCK_BOOTTIME. The RPi pipeline, however, passes the
+ * unicam V4L2 buffer timestamp through unchanged. That timestamp is
+ * ktime_get_ns() with V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC, i.e. CLOCK_MONOTONIC.
+ * The two clocks differ only by suspend time, which is 0 on the Pi.
+ * See docs/week0.md §A6. */
+#define FRAME_CLOCK_ID CLOCK_MONOTONIC
 
 #define FRAME_MAX_PLANES 3
 enum { TS_SENSOR, TS_INGEST, TS_ENCODED, TS_SENT, TS_COUNT };

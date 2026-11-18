@@ -8,8 +8,8 @@
 | 2 | Reference pipeline works | ☑ | §A2 |
 | 3 | Reference latency (20 samples, median, test conditions) | ☑ | §A3, `data/latency_ref.csv` |
 | 4 | Reference CPU (rpicam-vid and gst-launch averages) | ☑ | §A3, `data/pidstat_ref.txt`, `data/mpstat_ref.txt` |
-| 5 | Formats: full list, chosen format and rationale, primary vs overlay | ☐ | §A4 |
-| 6 | Clock source: conclusion and evidence | ☐ | §A6 |
+| 5 | Formats: full list, chosen format and rationale, primary vs overlay | ☑ (plane id pending a monitor) | §A4 |
+| 6 | Clock source: conclusion and evidence | ☑ | §A6 |
 | 7 | V4L2 probe tool committed | ☑ | `tools/m2m_probe.c`, `data/m2m_probe.txt` |
 | 8 | Proposal submitted; metrics calibrated | ☐ | §Metrics |
 | 9 | Both consent emails sent | ☐ | — |
@@ -104,16 +104,68 @@ Raw output: `data/pidstat_ref.txt`, `data/mpstat_ref.txt`.
 
 ## A4 · Format intersection
 
-Commands: `v4l2-ctl -d /dev/video11 --list-formats-out`; `modetest -M vc4 -p`; `cam -c 1 -I`
+Commands: `v4l2-ctl -d /dev/video11 --list-formats-out`; `modetest -M vc4 -p`.
+The libcamera `cam` tool is **not** shipped on this system (`libcamera-tools` only has
+`qcam`, `ipa_verify`, `libcamera-bug-report`, `libcamerify`), so the libcamera column
+comes from the `python3-libcamera` bindings instead.
 
 | Format | libcamera | Encoder OUTPUT | DRM plane (id / primary or overlay) |
 | --- | --- | --- | --- |
-| YUV420 (`YU12`) |  |  |  |
-| NV12 |  |  |  |
+| YUV420 (`YU12`) | ✅ (default for VideoRecording) | ✅ | ✅ all primary and overlay planes, `LINEAR` only |
+| NV12 | ✅ | ✅ | ✅ all primary and overlay planes, `LINEAR` + `BROADCOM_SAND64/128/256` |
 
-**Chosen format**: TODO
-**Rationale**: TODO
-**Display plane**: TODO primary / overlay, plane id = TODO
+Sources: `data/libcamera_formats.txt` (`python3-libcamera`, `generate_configuration()` for
+the VideoRecording and Viewfinder roles), `data/m2m_probe.txt`, `data/modetest_planes.txt`.
+
+- libcamera (rpi/vc4 ISP output) offers NV21, YUV420, NV12, YVU420, XBGR8888, BGR888,
+  RGB888, XRGB8888, RGB565 and the 4:2:2 packed formats. The VideoRecording default is
+  YUV420 1920x1080.
+- Naming: libcamera `YUV420` = DRM/V4L2 fourcc `YU12` (3 planes: Y, U, V).
+  `NV12` = Y plane plus an interleaved UV plane (2 planes).
+- The intersection of all three columns is {YU12, YV12, NV12, NV21}. The two
+  candidates are YU12 and NV12.
+
+DRM planes (`modetest -M vc4 -p`, summarized):
+
+| Planes | Type | possible_crtcs |
+| --- | --- | --- |
+| 48, 67, 79, 91, 103, 115 | Primary (one per CRTC) | 0x01, 0x02, 0x04, 0x08, 0x10, 0x20 |
+| 127–292 (16 planes) | Overlay | 0x3e (CRTCs 1–5) |
+| 303–644 (32 planes) | Overlay | 0x01 (CRTC 0 only) |
+| 655–710 (6 planes) | Cursor | one per CRTC |
+
+All primary and overlay planes accept YU12 and NV12 with the `LINEAR` modifier. libcamera
+buffers are linear, so any of these planes can scan them out directly. The SAND (column)
+modifiers apply only to NV12 and are not used here.
+
+State when probed: `HDMI-A-1` and `HDMI-A-2` were both **disconnected**, every CRTC was
+inactive (size 0x0), and no compositor (labwc / wayfire / Xorg / weston) was running.
+
+**Chosen format**: `YUV420` / DRM `YU12` (3 planes). Fallback: `NV12`.
+
+**Rationale**:
+
+- It is in all three sets with the `LINEAR` modifier.
+- It is libcamera's default for the VideoRecording role.
+- It is the format `rpicam-vid` already passes to `/dev/video11` by dmabuf in the reference
+  pipeline. Using the same encoder input keeps the A3 comparison fair: only the
+  architecture changes.
+- Risk: the encoder assumes the chroma stride is half the luma stride. At 1280 wide that
+  is 640 B, which is 64-aligned, so it should hold. Verify against the real
+  `stride[]` values printed in B3. If it does not hold, switch to NV12, whose UV
+  plane has the same stride as Y.
+
+**Display plane**: not fixed yet. It depends on which CRTC drives the connected HDMI port,
+and that cannot be known while nothing is connected.
+
+- Plan: pick the plane at runtime instead of hard-coding an id. Find the CRTC bound to
+  the connected connector, then choose a plane whose `possible_crtcs` includes it and
+  whose `type` fits.
+- Primary vs overlay: no compositor is running, so the gateway can be DRM master and put
+  the video on the CRTC's **primary** plane. If a console/desktop framebuffer must stay
+  visible, use an overlay plane instead.
+- TODO (display owner): connect an HDMI monitor (HDMI-A-1, the port next to USB-C), re-run
+  `modetest -M vc4 -c -e -p`, and record the connector → CRTC → plane mapping here.
 
 (Raw outputs saved under `data/`.)
 
@@ -151,10 +203,70 @@ Commands: `v4l2-ctl -d /dev/video11 --list-formats-out`; `modetest -M vc4 -p`; `
 
 ## A6 · SensorTimestamp clock source
 
-- libcamera docs, quoted: TODO
-- Source location (`src/libcamera/pipeline/rpi/...`): TODO
-- Measurement: TODO (only used to rule out REALTIME)
-- **Conclusion**: the other three timestamps use `clock_gettime(TODO)`; update `FRAME_CLOCK_ID` in `include/frame.h` to match
+**What the API promises.** From `src/libcamera/control_ids_core.yaml`, the `SensorTimestamp` entry:
+
+> The time when the first row of the image sensor active array is exposed.
+> The timestamp, expressed in nanoseconds, represents a monotonically
+> increasing counter since the system boot time, as defined by the
+> Linux-specific CLOCK_BOOTTIME clock id.
+
+**What the code actually does.** Source checked on `raspberrypi/libcamera` `main` (2026-11):
+
+1. `src/libcamera/v4l2_videodevice.cpp`, `V4L2VideoDevice::dequeueBuffer()`:
+   `metadata.timestamp = buf.timestamp.tv_sec * 1000000000ULL + buf.timestamp.tv_usec * 1000ULL;`
+   This copies the kernel's `v4l2_buffer` timestamp unchanged. The code never checks
+   `V4L2_BUF_FLAG_TIMESTAMP_*` and never converts between clocks.
+2. `src/libcamera/pipeline/rpi/vc4/vc4.cpp`, `Vc4CameraData::unicamBufferDequeue()`
+   (Image stream branch):
+   `uint64_t sensorTimestamp = buffer->metadata().timestamp;`
+   `ctrl.set(controls::SensorTimestamp, sensorTimestamp);`
+3. `src/libcamera/pipeline/rpi/common/pipeline_base.cpp`, `CameraData::fillRequestMetadata()`:
+   copies `SensorTimestamp` from the buffer's controls into the request metadata.
+
+So on the Pi, `SensorTimestamp` is whatever clock the **unicam kernel driver** stamps its
+vb2 buffers with.
+
+**Kernel driver.** The kernel config enables both unicam drivers
+(`CONFIG_VIDEO_BCM2835_UNICAM=m` and `CONFIG_VIDEO_BCM2835_UNICAM_LEGACY=m`).
+The module that is actually loaded is the upstream one:
+`modinfo -n bcm2835_unicam` → `.../drivers/media/platform/broadcom/bcm2835-unicam.ko.xz`.
+In `drivers/media/platform/broadcom/bcm2835-unicam.c` (source tree `/home/pi/linux`):
+
+- line 2285: `q->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;`
+- line 800: `ts = ktime_get_ns();`. This is in the IRQ handler on frame start
+  (`UNICAM_FSI`), and it is stored into `vb2_buf.timestamp`. The legacy driver
+  (`platform/bcm2835/`, line 942) does the same.
+
+`ktime_get_ns()` reads CLOCK_MONOTONIC. CLOCK_BOOTTIME = CLOCK_MONOTONIC + time spent in
+suspend.
+
+**Measurement** (`data/a6_clock.txt`). The command was
+`rpicam-vid -t 1000 -n -o /dev/null --metadata - --metadata-format txt`; the clocks were
+read with Python right after it exited:
+
+| Value | ns |
+| --- | --- |
+| last `SensorTimestamp` | 9 029 322 546 000 |
+| previous `SensorTimestamp` | 9 029 289 224 000 (Δ = 33.3 ms → 30 fps) |
+| `CLOCK_MONOTONIC` | 9 029 803 853 903 (0.48 s later: rpicam-vid shutdown + Python start) |
+| `CLOCK_BOOTTIME` | 9 029 803 855 588 |
+| `CLOCK_REALTIME` | 1 794 972 323 229 139 045 (epoch-based, so ruled out) |
+| BOOTTIME − MONOTONIC | 1 685 ns (just the gap between the two calls; no suspend time) |
+
+Side observations:
+
+- `SensorTimestamp` always ends in `000`. V4L2 hands timestamps to userspace as a
+  `struct timeval`, so the resolution is 1 µs.
+- The value is taken when the CSI receiver sees **frame start**, not when the first row
+  starts exposing, which is what the libcamera docs describe. It therefore lags the true
+  start of exposure by about the exposure time (5 ms with `SHUTTER=5000`) plus the
+  first row's readout. This constant offset belongs in the latency budget.
+
+**Conclusion**: `SensorTimestamp` is CLOCK_MONOTONIC on this system. The documentation
+says CLOCK_BOOTTIME, but on a Pi that never suspends the two are numerically the same.
+The other three timestamps use `clock_gettime(CLOCK_MONOTONIC)`, so it matches the actual
+data source even if a suspend ever happened. `FRAME_CLOCK_ID` in `include/frame.h` is
+set to `CLOCK_MONOTONIC`.
 
 ## Metrics (calibrated)
 
