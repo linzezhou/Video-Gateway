@@ -1,3 +1,16 @@
+# Environment
+
+Versions are frozen: no more `apt full-upgrade` for the rest of the project.
+
+## Hardware
+
+- Pi model (`cat /proc/device-tree/model`): TODO
+- `getconf LONG_BIT`: TODO
+- Camera: Camera Module 3 (imx708)
+
+## OS and kernel
+
+```text
 PRETTY_NAME="Debian GNU/Linux 13 (trixie)"
 NAME="Debian GNU/Linux"
 VERSION_ID="13"
@@ -8,9 +21,15 @@ ID=debian
 HOME_URL="https://www.debian.org/"
 SUPPORT_URL="https://www.debian.org/support"
 BUG_REPORT_URL="https://bugs.debian.org/"
+```
 
-Kernel Version : 6.18.58-rt9-v8+
+Kernel (`uname -r`): `6.18.58-rt9-v8+`
 
+Kernel notes: TODO. This is a PREEMPT_RT kernel; the trailing `+` means it was built from a source tree with uncommitted changes. Record whether this is intentional and where it came from. All latency and CPU measurements must use the same kernel.
+
+## Package versions
+
+```text
 ii  gstreamer1.0-tools                   1.26.2-2                             arm64        Tools for use with GStreamer
 ii  libcamera-dev                        0.7.2+rpt20261009-1                  arm64        complex camera support library (development files)
 ii  libcamera-ipa:arm64                  0.7.2+rpt20261009-1                  arm64        complex camera support library (IPA modules)
@@ -27,7 +46,11 @@ ii  rpicam-apps-encoder:arm64            1.14.0-1                             ar
 ii  rpicam-apps-lite                     1.14.0-1                             all          transitional package
 ii  rpicam-apps-opencv-postprocess       1.14.0-1                             arm64        Framework for rpicam-apps camera applications
 ii  rpicam-apps-preview:arm64            1.14.0-1                             arm64        Framework for rpicam-apps camera applications
+```
 
+## Camera
+
+```text
 pi@ksk94-lz674:~ $ rpicam-hello --list-cameras
 Available cameras
 -----------------
@@ -35,7 +58,15 @@ Available cameras
     Modes: 'SRGGB10_CSI2P' : 1536x864 [120.13 fps - (768, 432)/3072x1728 crop]
                              2304x1296 [56.03 fps - (0, 0)/4608x2592 crop]
                              4608x2592 [14.35 fps - (0, 0)/4608x2592 crop]
+```
 
+## V4L2 devices
+
+- `unicam`: CSI-2 receiver, outputs raw Bayer
+- `bcm2835-isp`: ISP, Bayer → YUV
+- `bcm2835-codec`: `/dev/video10` decoder, `/dev/video11` H.264 encoder, `/dev/video12` M2M ISP
+
+```text
 pi@ksk94-lz674:~/gateway/Video-Gateway/data $ v4l2-ctl --list-devices
 bcm2835-codec-decode (platform:bcm2835-codec):
         /dev/video10
@@ -67,3 +98,4 @@ rpi-hevc-dec (platform:rpi-hevc-dec):
 
 bcm2835-codec (vchiq:bcm2835-codec):
         /dev/media4
+```

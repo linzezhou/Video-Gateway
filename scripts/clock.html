@@ -1,0 +1,11 @@
+<!doctype html>
+<title>Latency Clock</title>
+<body style="margin:0;background:#000;color:#fff;font:bold 120px monospace">
+<div id="t"></div>
+<script>
+const t = document.getElementById('t');
+(function tick() {
+  t.textContent = Math.floor(performance.now() % 100000).toString().padStart(5, '0');
+  requestAnimationFrame(tick);
+})();
+</script>
