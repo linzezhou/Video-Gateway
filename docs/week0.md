@@ -11,8 +11,7 @@
 | 5 | Formats: full list, chosen format and rationale, primary vs overlay | ☑ (plane id pending a monitor) | §A4 |
 | 6 | Clock source: conclusion and evidence | ☑ | §A6 |
 | 7 | V4L2 probe tool committed | ☑ | `tools/m2m_probe.c`, `data/m2m_probe.txt` |
-| 8 | Proposal submitted; metrics calibrated | ☐ | §Metrics |
-| 9 | Both consent emails sent | ☐ | — |
+| 8 | Proposal submitted; metrics calibrated | ◐ metrics calibrated; proposal submission TODO confirm | §Metrics |
 
 ## A2 · Reference pipeline
 
@@ -270,7 +269,33 @@ set to `CLOCK_MONOTONIC`.
 
 ## Metrics (calibrated)
 
-| Metric | Original target | Calibrated | Basis |
+The original targets come from the 11/1 project context document (basic / stretch). The calibration rule set
+there is: if the official pipeline already needs about 130 ms, change the end-to-end target to "close to the
+official pipeline" and show the value of zero-copy through the CPU comparison and the latency breakdown instead.
+
+| Metric | Original target (basic / stretch) | Calibrated target (basic / stretch) | Basis |
 | --- | --- | --- | --- |
-| End-to-end glass-to-glass |  | TODO (reference median: 400 ms, Wi-Fi) | A3 reference median |
-| CPU (sender side, % of one core) |  | TODO (reference: 22.5) | A3 pidstat total |
+| Resolution and frame rate | 720p30 / 1080p30 | 720p30 / 1080p30 (unchanged; 1080p has low priority given the schedule) | Sensor mode 2304x1296@56 covers 1080p30 (env.md) |
+| End-to-end glass-to-glass (median of 20) | ≤ 150 ms / ≤ 120 ms | **≤ reference median under identical conditions** / ≤ 150 ms absolute with a tuned receiver | A3: reference median **400 ms** (Wi-Fi, `recv_mac.sh gst`) |
+| Application-level pixel copies | 0 / 0 | 0 / 0 (unchanged) | Code review; no `memcpy` hotspot in `perf` |
+| CPU usage | Clearly below `gateway_baseline` / per-stage breakdown | Below `gateway_baseline` beyond run-to-run noise, **and** sender-side total ≤ reference 22.5% of one core / per-stage breakdown | A3: `rpicam-vid` 14.65 + `gst-launch` 7.86 = 22.5% (pidstat); 29.5% system-wide (mpstat) |
+| Frame drop rate | < 1% over 30 min / < 0.1% | Unchanged | — |
+| Long-run stability | 2 h with no fd or RSS growth / client reconnect without crash | Unchanged | — |
+| Per-stage latency breakdown | capture, encode, send / + display submit | Unchanged; all stamps on `CLOCK_MONOTONIC` | A6: `TS_SENSOR` is frame start at the CSI receiver (1 µs resolution), lagging exposure start by about the shutter time |
+
+Why each target changed:
+
+- **End-to-end.** The reference median, 400 ms, is about 2.7× the original 150 ms target. The gateway uses the
+  same sensor, ISP, hardware encoder, Wi-Fi link and Mac receiver. It removes only the pipe between two
+  processes and a second `h264parse` pass, which is worth a few ms at most. That is below the ±17 ms reading
+  error. An absolute ≤ 150 ms target is therefore not something the gateway itself can achieve. The basic target
+  becomes "no worse than the official pipeline when measured the same way".
+  - The 150 ms figure is kept as the stretch target, but only for a tuned receiver: `avdec_h264 max-threads=1`,
+    preferably wired Ethernet. Tuned-receiver results are reported separately from the like-for-like comparison.
+- **CPU.** One `memcpy` of a 1280×720 YUV420 frame is 1.38 MB, or about 41 MB/s at 30 fps. Expect the
+  zero-copy vs. baseline gap to be only a few percent of one core. To show that it is real and not noise, run
+  `pidstat -u 1 60` 3 times for each binary and report the spread. The stronger comparison is against the
+  reference pipeline. The 22.5% reference does not include display, so the gateway's number should be reported
+  both with and without display.
+- **Pending change.** If the `avdec_h264 max-threads=1` check (§A3) changes the receiver, re-measure the reference
+  median and update the 400 ms above. The targets are written relative to the reference, so they still apply.

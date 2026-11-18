@@ -4,8 +4,8 @@ Versions are frozen: no more `apt full-upgrade` for the rest of the project.
 
 ## Hardware
 
-- Pi model (`cat /proc/device-tree/model`): TODO
-- `getconf LONG_BIT`: TODO
+- Pi model (`cat /proc/device-tree/model`): Raspberry Pi 4 Model B Rev 1.5
+- `getconf LONG_BIT`: 64 (arm64 userland, matching the `arm64` packages below)
 - Camera: Camera Module 3 (imx708)
 
 ## OS and kernel
@@ -25,7 +25,18 @@ BUG_REPORT_URL="https://bugs.debian.org/"
 
 Kernel (`uname -r`): `6.18.58-rt9-v8+`
 
-Kernel notes: TODO. This is a PREEMPT_RT kernel; the trailing `+` means it was built from a source tree with uncommitted changes. Record whether this is intentional and where it came from. All latency and CPU measurements must use the same kernel.
+Kernel notes:
+
+- This is a self-built PREEMPT_RT kernel. The source tree is `/home/pi/linux` on the Pi. The trailing `+` means the
+  tree had uncommitted changes when it was built.
+- Decision (2026-11-17): keep this kernel for the whole project, so that every latency and CPU number is measured
+  on the same kernel. Do not upgrade the kernel or firmware packages.
+- Camera driver in use: upstream unicam (`drivers/media/platform/broadcom/bcm2835-unicam.ko`). The legacy driver is
+  also built (`CONFIG_VIDEO_BCM2835_UNICAM_LEGACY=m`) but not loaded. See week0.md §A6.
+- RT smoke test: the reference pipeline ran for 10 min with no relevant `dmesg` errors or warnings, and
+  `vcgencmd get_throttled` stayed at `0x0` (week0.md §A2).
+- Because of the RT kernel, IRQ handlers run as `irq/*` kernel threads. Per-process `pidstat` misses that time, so
+  also record `mpstat` (week0.md §A3).
 
 ## Package versions
 
