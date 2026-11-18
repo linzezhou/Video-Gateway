@@ -10,7 +10,7 @@
 | 4 | Reference CPU (rpicam-vid and gst-launch averages) | ☑ | §A3, `data/pidstat_ref.txt`, `data/mpstat_ref.txt` |
 | 5 | Formats: full list, chosen format and rationale, primary vs overlay | ☐ | §A4 |
 | 6 | Clock source: conclusion and evidence | ☐ | §A6 |
-| 7 | V4L2 probe tool committed | ☐ | `tools/m2m_probe.c`, `data/m2m_probe.txt` |
+| 7 | V4L2 probe tool committed | ☑ | `tools/m2m_probe.c`, `data/m2m_probe.txt` |
 | 8 | Proposal submitted; metrics calibrated | ☐ | §Metrics |
 | 9 | Both consent emails sent | ☐ | — |
 
@@ -119,11 +119,35 @@ Commands: `v4l2-ctl -d /dev/video11 --list-formats-out`; `modetest -M vc4 -p`; `
 
 ## A5 · V4L2 probe
 
-- `./build/m2m_probe /dev/video11 > data/m2m_probe.txt`
-- OUTPUT `DMABUF=`: TODO
-- Repeat Sequence Header control present: TODO
-- H264 Profile control present: TODO
-- Matches `v4l2-ctl --list-formats-out --list-formats --list-ctrls`: TODO
+- Built standalone: `gcc -Wall -Wextra -o m2m_probe tools/m2m_probe.c`.
+  Ran `./m2m_probe /dev/video11 | tee data/m2m_probe.txt`.
+- Device: `bcm2835-codec-encode`. `M2M_MPLANE=1`, so the gateway must use the
+  multi-planar API (`V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE` / `..._CAPTURE_MPLANE`).
+- OUTPUT `DMABUF=1`. The encoder can import libcamera dmabufs directly, which is
+  what zero-copy needs. CAPTURE also supports `DMABUF=1`, but the bitstream will use MMAP.
+- OUTPUT formats include both `YU12` and `NV12`, the candidates for §A4. `NC12`
+  (Broadcom column/SAND layout) is not considered.
+- Repeat Sequence Header control present: yes (`0x009909e2`, default 0). Set it to 1
+  so that SPS/PPS are re-sent with every IDR frame. This is the equivalent of
+  `rpicam-vid --inline`, and a receiver needs it to join mid-stream.
+- H264 Profile control present: yes (`0x00990a6b`, default 4 = High). Set it to 0
+  (Baseline) to match the reference pipeline (`--profile baseline`).
+- Other controls that matter:
+
+  | Control | Range / default | Plan |
+  | --- | --- | --- |
+  | Video B Frames | max 0 | No B-frames, so no reorder delay. Nothing to set. |
+  | H264 I-Frame Period / GOP Size | default 60 | Set to 30 to match `--intra 30`. |
+  | Video Bitrate | 25 kbps – 25 Mbps, default 10 Mbps | Keep the same bitrate in the reference run and the gateway run. |
+  | Video Bitrate Mode | 0 = VBR (default), 1 = CBR | TODO decide; record the choice. |
+  | H264 Level | default 11 = Level 4.0 | Sufficient for 720p30 and 1080p30. |
+  | Force Key Frame | button | Useful when a client joins. |
+
+- Matches `v4l2-ctl -d /dev/video11 --list-formats-out --list-formats --list-ctrls`: yes.
+  Both list the same 14 OUTPUT formats, the same 2 CAPTURE formats, and the same 12
+  controls, with identical IDs, ranges and defaults. `v4l2-ctl` also reports both queues
+  as "Multiplanar". What only the probe shows is the per-queue buffer capabilities from
+  `REQBUFS count=0` (`DMABUF=1`), which is the reason this tool exists.
 
 ## A6 · SensorTimestamp clock source
 
