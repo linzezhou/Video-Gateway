@@ -5,9 +5,9 @@
 | # | Criterion | Status | Evidence |
 | --- | --- | --- | --- |
 | 1 | Environment recorded; camera detected as imx708 | ☑ | [env.md](env.md) |
-| 2 | Reference pipeline works | ☐ | §A2 |
-| 3 | Reference latency (20 samples, median, test conditions) | ☐ | §A3, `data/latency_ref.csv` |
-| 4 | Reference CPU (rpicam-vid and gst-launch averages) | ☐ | §A3 |
+| 2 | Reference pipeline works | ☑ | §A2 |
+| 3 | Reference latency (20 samples, median, test conditions) | ☑ | §A3, `data/latency_ref.csv` |
+| 4 | Reference CPU (rpicam-vid and gst-launch averages) | ☑ | §A3, `data/pidstat_ref.txt`, `data/mpstat_ref.txt` |
 | 5 | Formats: full list, chosen format and rationale, primary vs overlay | ☐ | §A4 |
 | 6 | Clock source: conclusion and evidence | ☐ | §A6 |
 | 7 | V4L2 probe tool committed | ☐ | `tools/m2m_probe.c`, `data/m2m_probe.txt` |
@@ -17,32 +17,90 @@
 ## A2 · Reference pipeline
 
 - Pi: `scripts/ref_pi.sh <MAC_IP>`
-- Mac: `scripts/recv_mac.sh` (receiver fixed for all measurements: TODO gst / ffplay)
-- Result: TODO (live video on the Mac? issues hit)
+- Mac: `scripts/recv_mac.sh gst` (receiver fixed to GStreamer for all measurements)
+- Result: live 1280x720@30 video on the Mac.
+- Issues:
+  - First attempt failed on the Pi with `ERROR: *** no cameras available ***`
+    (`rpicam-hello --list-cameras` also reported none). A reboot fixed it; root
+    cause not identified (suspect the ribbon cable or a sensor probe failure at
+    boot). If it recurs, check `dmesg | grep -iE 'imx708|unicam'` before rebooting.
+  - When `rpicam-vid` fails, the script does not stop: `gst-launch-1.0` reads
+    EOS and exits right away, so look for errors at the top of the output.
+- Stability (PREEMPT_RT smoke test): ran for 10 min. `dmesg --level=err,warn`
+  filtered for `BUG|sleeping function|scheduling while atomic|vchiq|unicam|codec`
+  was empty. `vcgencmd get_throttled` was `0x0` before and after.
 
 ## A3 · Reference latency and CPU
 
 Test conditions:
 
-- Network: TODO wired / Wi-Fi
+- Network: Wi-Fi (Pi → Mac ping RTT 11.7–91.0 ms, avg 47.4 ms)
 - Mac display refresh rate: TODO Hz
-- Receiver command: TODO
-- Shutter: `SHUTTER=5000`
-- Kernel: TODO (RT kernel or not)
-- `vcgencmd get_throttled`: TODO
+- Receiver command: `scripts/recv_mac.sh gst`
+- Sender: `SHUTTER=5000 scripts/ref_pi.sh 192.168.1.142` (1280x720@30, H.264 baseline, intra 30)
+- Kernel: `6.18.58-rt9-v8+` (PREEMPT_RT); 10 min run with a clean dmesg (see §A2)
+- `vcgencmd get_throttled`: `0x0` before and after the run
 
-| Samples | Discarded | Median (ms) | Min (ms) | Max (ms) |
-| --- | --- | --- | --- | --- |
-| 20 |  |  |  |  |
+Method: the Pi camera points at `scripts/clock.html` on the Mac screen, and the received video
+window sits next to the live clock. A phone photo captures both numbers, and
+latency = live clock − clock seen in the video.
 
-Raw data: `data/latency_ref.csv`. Photos: `data/latency_photos/`.
+| Samples | Discarded | Median (ms) | Min (ms) | Max (ms) | Mean (ms) |
+| --- | --- | --- | --- | --- | --- |
+| 22 | 0 | **400** | 317 | 1102 | 441 |
+| 20 (stalls excluded) | 2 | 400 | 317 | 434 | — (stdev 25) |
 
-CPU (`pidstat -u 1 60`):
+Notes:
 
-| Process | Avg %CPU |
-| --- | --- |
-| rpicam-vid |  |
-| gst-launch-1.0 |  |
+- Readings are quantized by the 60 Hz display (16.7 ms steps). The phone exposure often
+  spans two refreshes, which shows up as ghosted digits on the live clock. When that happened,
+  the brighter value was used. Per-sample uncertainty is about ±17 ms.
+- Two samples are stalls: #5 at 749 ms and #10 at 1102 ms. Both photos are readable, so
+  they were kept in the main row. They are consistent with Wi-Fi bursts: the receiver uses
+  `rtpjitterbuffer latency=0 ! ... sync=false`, so late packets are displayed late instead
+  of being dropped.
+- A steady-state latency of about 400 ms is about 12 frames at 30 fps, which is much more
+  than capture, encode and Wi-Fi alone would explain. A likely contributor is frame-threaded
+  decoding in `avdec_h264` on the Mac, which adds roughly one frame of delay per decoder
+  thread. Next step: try `avdec_h264 max-threads=1`. If it lowers the median noticeably,
+  fix the receiver at that setting and re-measure this reference before using it for comparison.
+
+Raw data: `data/latency_ref.csv` (one row per photo, with the file name). Photos: `data/latency_photos/`.
+
+CPU, measured with the pipeline running (`pidstat -u -C 'rpicam-vid|gst-launch' 1 60`;
+%CPU is relative to one core, so the max is 400% on the 4-core Pi 4):
+
+| Process | %usr | %system | Avg %CPU |
+| --- | --- | --- | --- |
+| rpicam-vid | 4.58 | 10.07 | 14.65 |
+| gst-launch-1.0 | 6.01 | 1.85 | 7.86 |
+| **Total** | 10.59 | 11.92 | **22.51** |
+
+System-wide (`mpstat 1 60`, averaged over 4 cores):
+
+| %usr | %sys | %iowait | %irq | %soft | %idle |
+| --- | --- | --- | --- | --- | --- |
+| 2.83 | 4.40 | 0.01 | 0.00 | 0.11 | 92.63 |
+
+The system is 7.37% busy, which is about 29.5% of one core. That is roughly 7 points more
+than the two processes add up to. The difference is kernel threads and background tasks:
+under PREEMPT_RT, hard IRQs run as `irq/*` threads, so `%irq` reads 0.00 and that time is
+counted in `%sys` instead. kworkers, vchiq threads, sshd and the desktop also contribute.
+Use both numbers when comparing against the gateway later.
+
+Observations:
+
+- H.264 encoding runs on the VideoCore hardware encoder, so CPU cost is low.
+  `rpicam-vid` already passes ISP dmabufs straight to the encoder without copying them.
+- `rpicam-vid` is dominated by `%system` time: V4L2 queue/dequeue ioctls, dmabuf
+  handling, and writing the bitstream into the pipe.
+- `gst-launch-1.0` is dominated by `%usr` time: `h264parse` re-parses the bitstream and
+  `rtph264pay` builds the RTP packets.
+- What the gateway can actually save: the pipe between the two processes, the second
+  parse of the bitstream, and the extra process. The CPU target should be calibrated
+  against 22.5% of one core (see §Metrics).
+
+Raw output: `data/pidstat_ref.txt`, `data/mpstat_ref.txt`.
 
 ## A4 · Format intersection
 
@@ -78,4 +136,5 @@ Commands: `v4l2-ctl -d /dev/video11 --list-formats-out`; `modetest -M vc4 -p`; `
 
 | Metric | Original target | Calibrated | Basis |
 | --- | --- | --- | --- |
-| End-to-end glass-to-glass |  |  | A3 reference median |
+| End-to-end glass-to-glass |  | TODO (reference median: 400 ms, Wi-Fi) | A3 reference median |
+| CPU (sender side, % of one core) |  | TODO (reference: 22.5) | A3 pidstat total |
